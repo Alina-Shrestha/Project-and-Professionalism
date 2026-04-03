@@ -9,7 +9,7 @@ const missions = [
     icon: <Heart className="w-8 h-8 text-primary" />,
     title: "Our Mission",
     description:
-      "To democratize access to mental health support through ethical AI and blockchain technology, making quality therapeutic care available to everyone, everywhere, at any time.",
+      "To democratize access to mental health support through ethical AI , making quality therapeutic care available to everyone, everywhere, at any time.",
   },
   {
     icon: <Target className="w-8 h-8 text-primary" />,

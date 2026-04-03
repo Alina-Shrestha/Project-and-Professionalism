@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getLocalHistory } from "@/lib/server/chat-fallback";
 
 const BACKEND_API_URL =
   process.env.BACKEND_API_URL ||
@@ -10,7 +11,18 @@ export async function GET(
 ) {
   try {
     const { sessionId } = params;
+    const localHistory = getLocalHistory(sessionId);
+    if (localHistory.length > 0) {
+      return NextResponse.json(localHistory);
+    }
+
+    const authHeader =
+      req.headers.get("authorization") || req.headers.get("Authorization");
     console.log(`Getting chat history for session ${sessionId}`);
+
+    if (!authHeader) {
+      return NextResponse.json(getLocalHistory(sessionId));
+    }
 
     const response = await fetch(
       `${BACKEND_API_URL}/chat/sessions/${sessionId}/history`,
@@ -18,6 +30,7 @@ export async function GET(
         method: "GET",
         headers: {
           "Content-Type": "application/json",
+          ...(authHeader ? { Authorization: authHeader } : {}),
         },
       }
     );
@@ -25,10 +38,7 @@ export async function GET(
     if (!response.ok) {
       const error = await response.json();
       console.error("Failed to get chat history:", error);
-      return NextResponse.json(
-        { error: error.error || "Failed to get chat history" },
-        { status: response.status }
-      );
+      return NextResponse.json(getLocalHistory(sessionId));
     }
 
     const data = await response.json();
@@ -44,9 +54,7 @@ export async function GET(
     return NextResponse.json(formattedMessages);
   } catch (error) {
     console.error("Error getting chat history:", error);
-    return NextResponse.json(
-      { error: "Failed to get chat history" },
-      { status: 500 }
-    );
+    const sessionId = params.sessionId;
+    return NextResponse.json(getLocalHistory(sessionId));
   }
 }

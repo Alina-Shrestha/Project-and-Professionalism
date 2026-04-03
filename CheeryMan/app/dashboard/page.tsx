@@ -1,6 +1,11 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+} from "react";
 import { motion } from "framer-motion";
 import {
   Brain,
@@ -11,14 +16,19 @@ import {
   Heart,
   Trophy,
   Bell,
-  AlertCircle,
-  PhoneCall,
   Sparkles,
   MessageSquare,
   BrainCircuit,
   ArrowRight,
   X,
   Loader2,
+  Flame,
+  Zap,
+  Leaf,
+  CheckCircle2,
+  Smile,
+  Wind,
+  Rocket,
 } from "lucide-react";
 import {
   Card,
@@ -28,18 +38,13 @@ import {
   CardDescription,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Container } from "@/components/ui/container";
 import { cn } from "@/lib/utils";
-
 import { MoodForm } from "@/components/mood/mood-form";
 import { AnxietyGames } from "@/components/games/anxiety-games";
 
-import {
-  getUserActivities,
-  saveMoodData,
-  logActivity,
-} from "@/lib/static-dashboard-data";
+import { getUserActivities, logActivity } from "@/lib/static-dashboard-data";
+import { getMoodHistory, getMoodStats } from "@/lib/api/mood";
 
 import {
   Dialog,
@@ -48,7 +53,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import {
   addDays,
   format,
@@ -56,8 +61,18 @@ import {
   startOfDay,
   isWithinInterval,
 } from "date-fns";
+import {
+  ResponsiveContainer,
+  LineChart,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Line,
+} from "recharts";
 
 import { ActivityLogger } from "@/components/activities/activity-logger";
+import { OnboardingModal } from "@/components/onboarding/onboarding-modal";
 import { useSession } from "@/lib/contexts/session-context";
 import { getAllChatSessions } from "@/lib/api/chat";
 
@@ -98,6 +113,14 @@ interface DailyStats {
   mindfulnessCount: number;
   totalActivities: number;
   lastUpdated: Date;
+}
+
+interface MoodHistoryEntry {
+  _id: string;
+  score: number;
+  note?: string;
+  createdAt?: string;
+  timestamp?: string;
 }
 
 // Update the calculateDailyStats function to show correct stats
@@ -267,7 +290,7 @@ export default function Dashboard() {
   const [mounted, setMounted] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const router = useRouter();
-  const { user } = useSession();
+  const { user, loading: sessionLoading } = useSession();
 
   // Rename the state variable
   const [insights, setInsights] = useState<
@@ -286,10 +309,12 @@ export default function Dashboard() {
   const [activityHistory, setActivityHistory] = useState<DayActivity[]>([]);
   const [showActivityLogger, setShowActivityLogger] = useState(false);
   const [isSavingActivity, setIsSavingActivity] = useState(false);
-  const [isSavingMood, setIsSavingMood] = useState(false);
+  const [moodHistory, setMoodHistory] = useState<MoodHistoryEntry[]>([]);
+  const [isRefreshingStats, setIsRefreshingStats] = useState(false);
+  const [onboardingModalTrigger, setOnboardingModalTrigger] = useState(0);
   const [dailyStats, setDailyStats] = useState<DailyStats>({
     moodScore: null,
-    completionRate: 100,
+    completionRate: 0,
     mindfulnessCount: 0,
     totalActivities: 0,
     lastUpdated: new Date(),
@@ -335,6 +360,25 @@ export default function Dashboard() {
     return days;
   };
 
+  const moodTrendData = useMemo(() => {
+    return moodHistory
+      .map((entry) => ({
+        score: entry.score,
+        recordedAt: entry.createdAt || entry.timestamp,
+      }))
+      .filter((entry): entry is { score: number; recordedAt: string } =>
+        Boolean(entry.recordedAt)
+      )
+      .sort(
+        (a, b) =>
+          new Date(a.recordedAt).getTime() - new Date(b.recordedAt).getTime()
+      )
+      .map((entry) => ({
+        score: entry.score,
+        timestamp: new Date(entry.recordedAt).getTime(),
+      }));
+  }, [moodHistory]);
+
   // Modify the loadActivities function to use a default user ID
   const loadActivities = useCallback(async () => {
     try {
@@ -352,6 +396,14 @@ export default function Dashboard() {
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    if (!sessionLoading) {
+      if (!user) {
+        router.replace("/login");
+      }
+    }
+  }, [sessionLoading, user, router]);
+
   // Add this effect to update stats when activities change
   useEffect(() => {
     if (activities.length > 0) {
@@ -366,42 +418,145 @@ export default function Dashboard() {
     }
   }, [activities]);
 
+  // Add function to save wellness snapshot for analysis
+  const saveWellnessSnapshot = useCallback(async (moodScore: number | null, completionRate: number, totalActivities: number) => {
+    try {
+      const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+      if (!token) return;
+
+      await fetch("/api/wellness/snapshot", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          moodScore: moodScore || 0,
+          completionRate,
+          totalActivities,
+        }),
+      });
+    } catch (error) {
+      console.error("Error saving snapshot:", error);
+    }
+  }, []);
+
   // Add function to fetch daily stats
   const fetchDailyStats = useCallback(async () => {
     try {
-      // Fetch therapy sessions using the chat API
-      const sessions = await getAllChatSessions();
+      setIsRefreshingStats(true);
 
-      // Fetch today's activities
-      const activitiesResponse = await fetch("/api/activities/today");
-      if (!activitiesResponse.ok) throw new Error("Failed to fetch activities");
-      const activities = await activitiesResponse.json();
+      const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+      const authHeaders: Record<string, string> = {};
+      if (token) authHeaders.Authorization = `Bearer ${token}`;
 
-      // Calculate mood score from activities
-      const moodEntries = activities.filter(
-        (a: Activity) => a.type === "mood" && a.moodScore !== null
+      const [sessionsResult, moodStatsResult, moodHistoryResult, journalResult, triggerResult, erpResult] = await Promise.allSettled([
+        getAllChatSessions(),
+        getMoodStats("week"),
+        getMoodHistory({ limit: 7 }),
+        fetch("/api/journal", { headers: authHeaders }).then((res) => res.json()),
+        fetch("/api/triggers", { headers: authHeaders }).then((res) => res.json()),
+        fetch("/api/erp", { headers: authHeaders }).then((res) => res.json()),
+      ]);
+
+      const sessions =
+        sessionsResult.status === "fulfilled" && Array.isArray(sessionsResult.value)
+          ? sessionsResult.value
+          : [];
+
+      const moodStatsResponse =
+        moodStatsResult.status === "fulfilled"
+          ? moodStatsResult.value
+          : {
+              data: { average: 0, count: 0, highest: 0, lowest: 0, history: [] },
+            };
+
+      const moodHistoryResponse =
+        moodHistoryResult.status === "fulfilled"
+          ? moodHistoryResult.value
+          : { data: [] };
+
+      const journalEntries =
+        journalResult.status === "fulfilled" && Array.isArray(journalResult.value?.data)
+          ? journalResult.value.data
+          : [];
+
+      const triggerLogs =
+        triggerResult.status === "fulfilled" && Array.isArray(triggerResult.value?.data)
+          ? triggerResult.value.data
+          : [];
+
+      const erpRecords =
+        erpResult.status === "fulfilled" && Array.isArray(erpResult.value?.data?.records)
+          ? erpResult.value.data.records
+          : [];
+
+      const todayStart = startOfDay(new Date());
+      const todayEnd = addDays(todayStart, 1);
+
+      const isToday = (value?: string | Date) => {
+        if (!value) return false;
+        const date = new Date(value);
+        if (isNaN(date.getTime())) return false;
+        return isWithinInterval(date, { start: todayStart, end: todayEnd });
+      };
+
+      const moodEntriesToday = (Array.isArray(moodHistoryResponse.data) ? moodHistoryResponse.data : []).filter(
+        (entry: any) => isToday(entry.createdAt || entry.timestamp)
       );
-      const averageMood =
-        moodEntries.length > 0
+
+      const journalToday = journalEntries.filter((entry: any) => isToday(entry.createdAt));
+      const triggersToday = triggerLogs.filter((entry: any) => isToday(entry.createdAt));
+      const erpToday = erpRecords.filter((entry: any) => isToday(entry.createdAt));
+      const sessionsToday = sessions.filter((entry: any) => isToday(entry.updatedAt || entry.createdAt));
+
+      const moodAverageToday =
+        moodEntriesToday.length > 0
           ? Math.round(
-              moodEntries.reduce(
-                (acc: number, curr: Activity) => acc + (curr.moodScore || 0),
-                0
-              ) / moodEntries.length
+              moodEntriesToday.reduce((sum: number, entry: any) => sum + (entry.score || 0), 0) /
+                moodEntriesToday.length
             )
           : null;
 
+      const completionChecks = [
+        moodEntriesToday.length > 0,
+        journalToday.length > 0,
+        erpToday.length > 0,
+      ];
+      const completionRate = Math.round(
+        (completionChecks.filter(Boolean).length / completionChecks.length) * 100
+      );
+
+      const averageMood =
+        moodStatsResponse.data.count > 0
+          ? Math.round(moodStatsResponse.data.average)
+          : null;
+
+      const totalActivitiesCount =
+        moodEntriesToday.length +
+        journalToday.length +
+        triggersToday.length +
+        erpToday.length +
+        sessionsToday.length;
+
       setDailyStats({
-        moodScore: averageMood,
-        completionRate: 100,
-        mindfulnessCount: sessions.length, // Total number of therapy sessions
-        totalActivities: activities.length,
+        moodScore: moodAverageToday ?? averageMood,
+        completionRate,
+        mindfulnessCount: sessions.length,
+        totalActivities: totalActivitiesCount,
         lastUpdated: new Date(),
       });
+
+      // Save wellness snapshot for historical analysis
+      await saveWellnessSnapshot(moodAverageToday ?? averageMood, completionRate, totalActivitiesCount);
+
+      setMoodHistory(Array.isArray(moodHistoryResponse.data) ? moodHistoryResponse.data : []);
     } catch (error) {
       console.error("Error fetching daily stats:", error);
+    } finally {
+      setIsRefreshingStats(false);
     }
-  }, []);
+  }, [saveWellnessSnapshot]);
 
   // Fetch stats on mount and every 5 minutes
   useEffect(() => {
@@ -413,36 +568,41 @@ export default function Dashboard() {
   // Update wellness stats to reflect the changes
   const wellnessStats = [
     {
-      title: "Mood Score",
-      value: dailyStats.moodScore ? `${dailyStats.moodScore}%` : "No data",
-      icon: Brain,
-      color: "text-purple-500",
-      bgColor: "bg-purple-500/10",
-      description: "Today's average mood",
-    },
-    {
-      title: "Completion Rate",
-      value: "100%",
-      icon: Trophy,
-      color: "text-yellow-500",
-      bgColor: "bg-yellow-500/10",
-      description: "Perfect completion rate",
-    },
-    {
-      title: "Therapy Sessions",
-      value: `${dailyStats.mindfulnessCount} sessions`,
-      icon: Heart,
+      title: "Emotional Well-being",
+      value:
+        dailyStats.moodScore !== null ? `${dailyStats.moodScore}%` : "—",
+      icon: Smile,
       color: "text-rose-500",
-      bgColor: "bg-rose-500/10",
-      description: "Total sessions completed",
+      bgColor: "bg-gradient-to-br from-rose-500/20 to-pink-500/10",
+      description: "Your emotional state today",
+      borderColor: "border-rose-500/30",
     },
     {
-      title: "Total Activities",
+      title: "Wellness Journey",
+      value: `${dailyStats.completionRate}%`,
+      icon: Flame,
+      color: "text-amber-500",
+      bgColor: "bg-gradient-to-br from-amber-500/20 to-orange-500/10",
+      description: "Keep the momentum going!",
+      borderColor: "border-amber-500/30",
+    },
+    {
+      title: "Mindful Moments",
+      value: `${dailyStats.mindfulnessCount}`,
+      icon: Leaf,
+      color: "text-emerald-500",
+      bgColor: "bg-gradient-to-br from-emerald-500/20 to-teal-500/10",
+      description: "Sessions completed",
+      borderColor: "border-emerald-500/30",
+    },
+    {
+      title: "Actions Taken",
       value: dailyStats.totalActivities.toString(),
-      icon: Activity,
-      color: "text-blue-500",
-      bgColor: "bg-blue-500/10",
-      description: "Planned for today",
+      icon: Zap,
+      color: "text-violet-500",
+      bgColor: "bg-gradient-to-br from-violet-500/20 to-purple-500/10",
+      description: "Steps towards wellness",
+      borderColor: "border-violet-500/30",
     },
   ];
 
@@ -456,25 +616,57 @@ export default function Dashboard() {
     router.push("/therapy/new");
   };
 
-  const handleMoodSubmit = async (data: { moodScore: number }) => {
-    setIsSavingMood(true);
-    try {
-      await saveMoodData({
-        userId: "default-user",
-        mood: data.moodScore,
-        note: "",
-      });
-      setShowMoodModal(false);
-    } catch (error) {
-      console.error("Error saving mood:", error);
-    } finally {
-      setIsSavingMood(false);
-    }
-  };
-
   const handleAICheckIn = () => {
     setShowActivityLogger(true);
   };
+
+  const handleCompleteOnboarding = () => {
+    setOnboardingModalTrigger((value) => value + 1);
+  };
+
+  const handleViewTherapists = () => {
+    router.push("/therapists");
+  };
+
+  const handleDownloadProgressSummary = () => {
+    const summaryLines = [
+      "CheeryMan Progress Summary",
+      `Generated: ${new Date().toLocaleString()}`,
+      `User: ${user?.name || "User"}`,
+      "",
+      "Latest Metrics",
+      `- Emotional Well-being Score: ${dailyStats.moodScore ?? "N/A"}`,
+      `- Wellness Journey Completion: ${dailyStats.completionRate}%`,
+      `- Mindful Moments: ${dailyStats.mindfulnessCount}`,
+      `- Actions Taken Today: ${dailyStats.totalActivities}`,
+      "",
+      "Top Insights",
+      ...(insights.length
+        ? insights.map((item, index) => `${index + 1}. ${item.title}: ${item.description}`)
+        : ["1. No insight available yet. Continue tracking activities for personalized analysis."]),
+    ];
+
+    const blob = new Blob([summaryLines.join("\n")], {
+      type: "text/plain;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "cheeryman-latest-progress-summary.txt";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const flowModules = [
+    { title: "Journal", description: "Write and reflect", path: "/journal" },
+    { title: "ERP", description: "Complete exposure tasks", path: "/erp" },
+    { title: "Trigger Log", description: "Track situation-thought-reaction", path: "/triggers" },
+    { title: "Therapists", description: "Get professional support", path: "/therapists" },
+    { title: "Forum", description: "Anonymous peer support", path: "/forum" },
+    { title: "Admin", description: "Manage system content", path: "/admin" },
+  ];
 
   // Add handler for game activities
   const handleGamePlayed = useCallback(
@@ -498,7 +690,7 @@ export default function Dashboard() {
   );
 
   // Simple loading state
-  if (!mounted) {
+  if (!mounted || sessionLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
@@ -508,6 +700,10 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-background">
+      <OnboardingModal
+        onCompleted={fetchDailyStats}
+        manualOpenTrigger={onboardingModalTrigger}
+      />
       <Container className="pt-20 pb-8 space-y-6">
         {/* Header Section */}
         <div className="flex justify-between items-center">
@@ -534,54 +730,51 @@ export default function Dashboard() {
           </div>
         </div>
 
+        <Card className="border-primary/15 bg-primary/5">
+          <CardContent className="p-4 md:p-5">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="font-semibold text-foreground">Guided Next Steps</p>
+                <p className="text-sm text-muted-foreground">
+                  Complete onboarding, review therapist suggestions, or download your latest progress summary.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 w-full md:w-auto">
+                <Button variant="outline" onClick={handleCompleteOnboarding}>
+                  Complete onboarding
+                </Button>
+                <Button variant="outline" onClick={handleViewTherapists}>
+                  View therapist recommendations
+                </Button>
+                <Button onClick={handleDownloadProgressSummary}>
+                  Download latest progress summary
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Main Grid Layout */}
         <div className="space-y-6">
           {/* Top Cards Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {/* Quick Actions Card */}
-            <Card className="border-primary/10 relative overflow-hidden group">
-              <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-primary/10 to-transparent" />
-              <CardContent className="p-6 relative">
-                <div className="space-y-6">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
-                      <Sparkles className="w-5 h-5 text-primary" />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-lg">Quick Actions</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Start your wellness journey
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="grid gap-3">
-                    <Button
-                      variant="default"
-                      className={cn(
-                        "w-full justify-between items-center p-6 h-auto group/button",
-                        "bg-gradient-to-r from-primary/90 to-primary hover:from-primary hover:to-primary/90",
-                        "transition-all duration-200 group-hover:translate-y-[-2px]"
-                      )}
-                      onClick={handleStartTherapy}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center">
-                          <MessageSquare className="w-4 h-4 text-white" />
-                        </div>
-                        <div className="text-left">
-                          <div className="font-semibold text-white">
-                            Start Therapy
-                          </div>
-                          <div className="text-xs text-white/80">
-                            Begin a new session
-                          </div>
-                        </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="space-y-4">
+              {/* Quick Actions Card */}
+              <Card className="border-primary/10 relative overflow-hidden group">
+                <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-primary/10 to-transparent" />
+                <CardContent className="p-6 relative">
+                  <div className="space-y-6">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                        <Sparkles className="w-5 h-5 text-primary" />
                       </div>
-                      <div className="opacity-0 group-hover/button:opacity-100 transition-opacity">
-                        <ArrowRight className="w-5 h-5 text-white" />
+                      <div>
+                        <h3 className="font-semibold text-lg">Quick Actions</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Start your wellness journey
+                        </p>
                       </div>
-                    </Button>
+                    </div>
 
                     <div className="grid grid-cols-2 gap-3">
                       <Button
@@ -623,59 +816,184 @@ export default function Dashboard() {
                           </div>
                         </div>
                       </Button>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
 
-            {/* Today's Overview Card */}
-            <Card className="border-primary/10">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>Today's Overview</CardTitle>
-                    <CardDescription>
-                      Your wellness metrics for{" "}
-                      {format(new Date(), "MMMM d, yyyy")}
-                    </CardDescription>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={fetchDailyStats}
-                    className="h-8 w-8"
-                  >
-                    <Loader2 className={cn("h-4 w-4", "animate-spin")} />
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-2 gap-3">
-                  {wellnessStats.map((stat) => (
-                    <div
-                      key={stat.title}
-                      className={cn(
-                        "p-4 rounded-lg transition-all duration-200 hover:scale-[1.02]",
-                        stat.bgColor
-                      )}
-                    >
-                      <div className="flex items-center gap-2">
-                        <stat.icon className={cn("w-5 h-5", stat.color)} />
-                        <p className="text-sm font-medium">{stat.title}</p>
-                      </div>
-                      <p className="text-2xl font-bold mt-2">{stat.value}</p>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        {stat.description}
-                      </p>
+                      <Button
+                        variant="outline"
+                        className={cn(
+                          "flex flex-col h-[120px] px-4 py-3 group/trends hover:border-primary/50",
+                          "justify-center items-center text-center",
+                          "transition-all duration-200 group-hover:translate-y-[-2px]"
+                        )}
+                        onClick={() => router.push("/analytics")}
+                      >
+                        <div className="w-10 h-10 rounded-full bg-violet-500/10 flex items-center justify-center mb-2">
+                          <Sparkles className="w-5 h-5 text-violet-500" />
+                        </div>
+                        <div>
+                          <div className="font-medium text-sm">View Trends</div>
+                          <div className="text-xs text-muted-foreground mt-0.5">
+                            7-day analysis
+                          </div>
+                        </div>
+                      </Button>
+
+                      <Button
+                        variant="outline"
+                        className={cn(
+                          "flex flex-col h-[120px] px-4 py-3 group/journal hover:border-primary/50",
+                          "justify-center items-center text-center",
+                          "transition-all duration-200 group-hover:translate-y-[-2px]"
+                        )}
+                        onClick={() => router.push("/journal")}
+                      >
+                        <div className="w-10 h-10 rounded-full bg-amber-500/10 flex items-center justify-center mb-2">
+                          <Calendar className="w-5 h-5 text-amber-500" />
+                        </div>
+                        <div>
+                          <div className="font-medium text-sm">Journal</div>
+                          <div className="text-xs text-muted-foreground mt-0.5">
+                            Reflect on your day
+                          </div>
+                        </div>
+                      </Button>
                     </div>
-                  ))}
-                </div>
-                <div className="mt-4 text-xs text-muted-foreground text-right">
-                  Last updated: {format(dailyStats.lastUpdated, "h:mm a")}
-                </div>
-              </CardContent>
-            </Card>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Start Therapy Card */}
+              <Card className="border-border/80 bg-card">
+                <CardHeader className="pb-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="space-y-1.5">
+                      <CardTitle className="text-xl flex items-center gap-2">
+                        <MessageSquare className="h-5 w-5 text-primary" />
+                        Start Therapy
+                      </CardTitle>
+                      <CardDescription>
+                        Begin a guided therapy conversation whenever you need support.
+                      </CardDescription>
+                    </div>
+                    <div className="hidden sm:flex items-center rounded-md border border-border px-2.5 py-1 text-xs text-muted-foreground">
+                      Private and secure
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="pt-0 space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2">
+                      <p className="text-xs text-muted-foreground">Session Type</p>
+                      <p className="text-sm font-medium">Guided Chat</p>
+                    </div>
+                    <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2">
+                      <p className="text-xs text-muted-foreground">Estimated Time</p>
+                      <p className="text-sm font-medium">5-15 minutes</p>
+                    </div>
+                  </div>
+
+                  <Button
+                    variant="default"
+                    className="w-full h-11 justify-between px-4"
+                    onClick={handleStartTherapy}
+                  >
+                    <span className="font-medium">Begin Therapy Session</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </Button>
+                </CardContent>
+              </Card>
+
+              <Card className="border-primary/10">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg">Daily Journey Modules</CardTitle>
+                  <CardDescription>Follow your full CheeryMan one place</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-2 gap-3">
+                    {flowModules.map((item) => (
+                      <Button
+                        key={item.title}
+                        variant="outline"
+                        className="h-auto p-3 flex-col items-start text-left"
+                        onClick={() => router.push(item.path)}
+                      >
+                        <span className="font-medium">{item.title}</span>
+                        <span className="text-xs text-muted-foreground mt-1">{item.description}</span>
+                      </Button>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Today's Overview Card */}
+              <Card className="border-primary/10 shadow-lg">
+                <CardHeader className="pb-4">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-1">
+                      <CardTitle className="text-2xl">✨ Today's Wellness Hub</CardTitle>
+                      <CardDescription className="text-sm">
+                        {format(new Date(), "EEEE, MMMM d")} • Your daily progress snapshot
+                      </CardDescription>
+                    </div>
+                    <motion.div
+                      animate={{ rotate: isRefreshingStats ? 360 : 0 }}
+                      transition={{ 
+                        duration: isRefreshingStats ? 1 : 0.3,
+                        repeat: isRefreshingStats ? Infinity : 0,
+                        ease: "linear"
+                      }}
+                    >
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={fetchDailyStats}
+                        className="h-9 w-9 rounded-full"
+                        disabled={isRefreshingStats}
+                      >
+                        <Zap className={cn("h-4 w-4", isRefreshingStats && "text-amber-500")} />
+                      </Button>
+                    </motion.div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-2 gap-4">
+                    {wellnessStats.map((stat) => (
+                      <motion.div
+                        key={stat.title}
+                        whileHover={{ scale: 1.03, translateY: -2 }}
+                        transition={{ type: "spring", stiffness: 300, damping: 20 }}
+                        className={cn(
+                          "p-5 rounded-xl transition-all duration-300 border cursor-pointer",
+                          "shadow-lg hover:shadow-xl",
+                          stat.bgColor,
+                          stat.borderColor,
+                          "backdrop-blur-sm"
+                        )}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <div className={cn("p-2 rounded-lg", `${stat.bgColor} border`, stat.borderColor)}>
+                            <stat.icon className={cn("w-5 h-5", stat.color)} />
+                          </div>
+                          <div />
+                        </div>
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                          {stat.title}
+                        </p>
+                        <p className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-foreground to-foreground/70 mb-1">
+                          {stat.value}
+                        </p>
+                        <p className="text-xs text-muted-foreground leading-relaxed">
+                          {stat.description}
+                        </p>
+                      </motion.div>
+                    ))}
+                  </div>
+                  <div className="mt-4 text-xs text-muted-foreground text-right flex items-center justify-end gap-2">
+                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500/60 animate-pulse" />
+                    Last updated: {format(dailyStats.lastUpdated, "h:mm a")}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
 
             {/* Insights Card */}
             <Card className="border-primary/10">
@@ -728,8 +1046,179 @@ export default function Dashboard() {
 
           {/* Content Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Left side - Spans 2 columns */}
             <div className="lg:col-span-3 space-y-6">
+              <Card className="border-border/80 bg-card shadow-sm">
+                <CardHeader className="border-b border-border/70">
+                  <CardTitle className="flex items-center gap-2">
+                    <Heart className="w-5 h-5 text-rose-500" />
+                    Recent Mood History
+                  </CardTitle>
+                  <CardDescription>
+                    Your latest mood check-ins
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {moodHistory.length === 0 ? (
+                    <div className="text-sm text-muted-foreground">
+                      No mood entries yet. Use Track Mood to add your first check-in.
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="h-[280px] w-full rounded-xl border border-border/70 bg-gradient-to-br from-sky-500/5 to-emerald-500/5 p-4">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart
+                            data={moodTrendData}
+                            margin={{ top: 12, right: 12, left: -12, bottom: 4 }}
+                          >
+                            <defs>
+                              <linearGradient id="moodLineGradient" x1="0" y1="0" x2="1" y2="0">
+                                <stop offset="0%" stopColor="#67a9c8" />
+                                <stop offset="100%" stopColor="#79bfa5" />
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid
+                              vertical={false}
+                              strokeDasharray="4 4"
+                              stroke="hsl(var(--border))"
+                            />
+                            <XAxis
+                              dataKey="timestamp"
+                              type="number"
+                              domain={["dataMin", "dataMax"]}
+                              tickFormatter={(value: number) =>
+                                format(new Date(value), "MMM d")
+                              }
+                              axisLine={false}
+                              tickLine={false}
+                              minTickGap={24}
+                              tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                            />
+                            <YAxis
+                              domain={[0, 100]}
+                              ticks={[0, 20, 40, 60, 80, 100]}
+                              tickFormatter={(value: number) => `${value}%`}
+                              axisLine={false}
+                              tickLine={false}
+                              width={42}
+                              tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                            />
+                            <Tooltip
+                              formatter={(value: number | string) => [
+                                `${value}%`,
+                                "Mood Score",
+                              ]}
+                              labelFormatter={(value) =>
+                                format(new Date(Number(value)), "MMM d, h:mm a")
+                              }
+                              contentStyle={{
+                                borderRadius: "0.75rem",
+                                borderColor: "hsl(var(--border))",
+                                backgroundColor: "hsl(var(--card))",
+                                boxShadow: "none",
+                              }}
+                              cursor={{ stroke: "hsl(var(--muted-foreground))", strokeDasharray: "4 4" }}
+                            />
+                            <Line
+                              type="monotoneX"
+                              dataKey="score"
+                              stroke="url(#moodLineGradient)"
+                              strokeWidth={2.5}
+                              dot={{ r: 3, strokeWidth: 2, fill: "#67a9c8", stroke: "hsl(var(--card))" }}
+                              activeDot={{ r: 5, strokeWidth: 2, fill: "#79bfa5", stroke: "hsl(var(--card))" }}
+                            />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                          <span>Showing latest {Math.min(moodHistory.length, 5)} entries</span>
+                          <span>Total records: {moodHistory.length}</span>
+                        </div>
+
+                        {moodHistory.slice(0, 5).map((entry) => {
+                          const recordedAt = entry.createdAt || entry.timestamp;
+                          const label =
+                            entry.score >= 80
+                              ? "Great"
+                              : entry.score >= 60
+                              ? "Good"
+                              : entry.score >= 40
+                              ? "Neutral"
+                              : entry.score >= 20
+                              ? "Low"
+                              : "Very Low";
+
+                          return (
+                            <div
+                              key={entry._id}
+                              className="rounded-xl border border-border/70 bg-card/60 px-4 py-3"
+                            >
+                              <div className="flex items-start justify-between gap-4">
+                                 <div className="space-y-2 min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span
+                                      className={cn(
+                                        "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium",
+                                        entry.score >= 80
+                                          ? "bg-emerald-500/10 text-emerald-600"
+                                          : entry.score >= 60
+                                          ? "bg-sky-500/10 text-sky-600"
+                                          : entry.score >= 40
+                                          ? "bg-slate-500/10 text-slate-600"
+                                          : entry.score >= 20
+                                          ? "bg-amber-500/10 text-amber-600"
+                                          : "bg-rose-500/10 text-rose-600"
+                                      )}
+                                    >
+                                      {label}
+                                    </span>
+                                    <span className="text-sm text-muted-foreground">
+                                      {entry.score}% score
+                                    </span>
+                                  </div>
+                                  <div className="h-1.5 w-48 max-w-full rounded-full bg-muted overflow-hidden">
+                                    <div
+                                      className={cn(
+                                        "h-full rounded-full transition-all",
+                                        entry.score >= 80
+                                          ? "bg-emerald-500"
+                                          : entry.score >= 60
+                                          ? "bg-sky-500"
+                                          : entry.score >= 40
+                                          ? "bg-slate-500"
+                                          : entry.score >= 20
+                                          ? "bg-amber-500"
+                                          : "bg-rose-500"
+                                      )}
+                                      style={{ width: `${Math.max(0, Math.min(100, entry.score))}%` }}
+                                    />
+                                  </div>
+                                  {entry.note ? (
+                                    <p className="text-sm text-muted-foreground line-clamp-2">
+                                      {entry.note}
+                                    </p>
+                                  ) : (
+                                    <p className="text-sm text-muted-foreground/70 italic">
+                                      No note added
+                                    </p>
+                                  )}
+                                </div>
+                                <div className="text-xs text-muted-foreground whitespace-nowrap pt-0.5">
+                                  {recordedAt
+                                    ? format(new Date(recordedAt), "MMM d, h:mm a")
+                                    : "Unknown time"}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
               {/* Anxiety Games - Now directly below Fitbit */}
               <AnxietyGames onGamePlayed={handleGamePlayed} />
             </div>
@@ -746,7 +1235,12 @@ export default function Dashboard() {
               Move the slider to track your current mood
             </DialogDescription>
           </DialogHeader>
-          <MoodForm onSuccess={() => setShowMoodModal(false)} />
+          <MoodForm
+            onSuccess={() => {
+              setShowMoodModal(false);
+              fetchDailyStats();
+            }}
+          />
         </DialogContent>
       </Dialog>
 

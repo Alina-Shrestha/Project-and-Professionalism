@@ -14,17 +14,22 @@ interface MoodFormProps {
 
 export function MoodForm({ onSuccess }: MoodFormProps) {
   const [moodScore, setMoodScore] = useState(50);
+  const [energy, setEnergy] = useState(3);
+  const [stress, setStress] = useState(3);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
   const { user, isAuthenticated, loading } = useSession();
   const router = useRouter();
 
+  const tagOptions = ["sleep", "work", "family", "social", "health"];
+
   const emotions = [
-    { value: 0, label: "😔", description: "Very Low" },
-    { value: 25, label: "😕", description: "Low" },
-    { value: 50, label: "😊", description: "Neutral" },
-    { value: 75, label: "😃", description: "Good" },
-    { value: 100, label: "🤗", description: "Great" },
+    { value: 0, description: "Very Low", color: "bg-rose-500" },
+    { value: 25, description: "Low", color: "bg-orange-500" },
+    { value: 50, description: "Neutral", color: "bg-amber-500" },
+    { value: 75, description: "Good", color: "bg-lime-500" },
+    { value: 100, description: "Great", color: "bg-emerald-500" },
   ];
 
   const currentEmotion =
@@ -59,7 +64,12 @@ export function MoodForm({ onSuccess }: MoodFormProps) {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ score: moodScore }),
+        body: JSON.stringify({
+          score: moodScore,
+          energy,
+          stress,
+          tags: selectedTags,
+        }),
       });
 
       console.log("MoodForm: Response status:", response.status);
@@ -97,27 +107,33 @@ export function MoodForm({ onSuccess }: MoodFormProps) {
     <div className="space-y-6 py-4">
       {/* Emotion display */}
       <div className="text-center space-y-2">
-        <div className="text-4xl">{currentEmotion.label}</div>
-        <div className="text-sm text-muted-foreground">
+        <div className="mx-auto h-10 w-10 rounded-full border border-border bg-muted flex items-center justify-center">
+          <div className={`h-4 w-4 rounded-full ${currentEmotion.color}`} />
+        </div>
+        <div className="text-sm font-medium">
           {currentEmotion.description}
         </div>
       </div>
 
       {/* Emotion slider */}
       <div className="space-y-4">
-        <div className="flex justify-between px-2">
+        <div className="grid grid-cols-5 gap-2">
           {emotions.map((em) => (
-            <div
+            <button
               key={em.value}
-              className={`cursor-pointer transition-opacity ${
+              type="button"
+              className={`cursor-pointer transition-all rounded-md border px-2 py-2 text-xs ${
                 Math.abs(moodScore - em.value) < 15
-                  ? "opacity-100"
-                  : "opacity-50"
+                  ? "opacity-100 border-primary bg-primary/10"
+                  : "opacity-80 border-border hover:bg-muted"
               }`}
               onClick={() => setMoodScore(em.value)}
             >
-              <div className="text-2xl">{em.label}</div>
-            </div>
+              <div className="flex flex-col items-center gap-1">
+                <div className={`h-2.5 w-2.5 rounded-full ${em.color}`} />
+                <div>{em.description}</div>
+              </div>
+            </button>
           ))}
         </div>
 
@@ -129,6 +145,60 @@ export function MoodForm({ onSuccess }: MoodFormProps) {
           step={1}
           className="py-4"
         />
+      </div>
+
+      {/* Simple analysis-friendly inputs */}
+      <div className="space-y-4">
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Energy: {energy}/5</div>
+          <Slider
+            value={[energy]}
+            onValueChange={(value) => setEnergy(value[0])}
+            min={1}
+            max={5}
+            step={1}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Stress: {stress}/5</div>
+          <Slider
+            value={[stress]}
+            onValueChange={(value) => setStress(value[0])}
+            min={1}
+            max={5}
+            step={1}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <div className="text-sm font-medium">What affected your mood?</div>
+          <div className="flex flex-wrap gap-2">
+            {tagOptions.map((tag) => {
+              const active = selectedTags.includes(tag);
+              return (
+                <button
+                  key={tag}
+                  type="button"
+                  className={`px-3 py-1.5 rounded-md border text-sm transition-colors ${
+                    active
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-background border-border hover:bg-muted"
+                  }`}
+                  onClick={() => {
+                    setSelectedTags((prev) =>
+                      prev.includes(tag)
+                        ? prev.filter((t) => t !== tag)
+                        : [...prev, tag]
+                    );
+                  }}
+                >
+                  {tag}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
       {/* Submit button */}

@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
+import { connectDB } from "@/lib/mongodb";
+import { verifyToken } from "@/lib/auth-token";
+import { Activity } from "@/models/Activity";
 
 export async function POST(req: NextRequest) {
-  const API_URL =
-    process.env.BACKEND_API_URL ||
-    "https://ai-therapist-agent-backend.onrender.com";
-  const token = req.headers.get("Authorization");
-
-  if (!token) {
+  const auth = req.headers.get("authorization") || req.headers.get("Authorization");
+  if (!auth?.startsWith("Bearer ")) {
     return NextResponse.json({ message: "No token provided" }, { status: 401 });
   }
 
   try {
+    const payload = verifyToken(auth.slice(7));
     const body = await req.json();
     const { type, name, description, duration } = body;
 
@@ -21,29 +21,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const response = await fetch(`${API_URL}/api/activity`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: token,
-      },
-      body: JSON.stringify({ type, name, description, duration }),
+    await connectDB();
+
+    const activity = await Activity.create({
+      userId: payload.id,
+      type,
+      name,
+      description: description || "",
+      duration: typeof duration === "number" ? duration : 0,
+      timestamp: new Date(),
     });
 
-    if (!response.ok) {
-      const error = await response.json();
-      return NextResponse.json(
-        { error: error.message || "Failed to log activity" },
-        { status: response.status }
-      );
-    }
-
-    const data = await response.json();
-    return NextResponse.json(data);
+    return NextResponse.json({ success: true, data: activity }, { status: 201 });
   } catch (error) {
     console.error("Error logging activity:", error);
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: error?.message || "Internal server error" },
       { status: 500 }
     );
   }

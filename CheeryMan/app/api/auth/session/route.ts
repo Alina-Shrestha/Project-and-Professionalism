@@ -1,22 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
+import { connectDB } from "@/lib/mongodb";
+import { verifyToken } from "@/lib/auth-token";
+import { User } from "@/models/User";
 
 export async function GET(req: NextRequest) {
   try {
-    // For now, return a mock authenticated session
-    // In a real app, you would validate the session token and return the actual user data
+    const auth = req.headers.get("authorization") || req.headers.get("Authorization");
+    if (!auth?.startsWith("Bearer ")) {
+      return NextResponse.json({ isAuthenticated: false, user: null }, { status: 401 });
+    }
+
+    const payload = verifyToken(auth.slice(7));
+
+    await connectDB();
+    const user = await User.findById(payload.id)
+      .select("_id name email username")
+      .lean() as
+      | {
+          _id: unknown;
+          name?: string;
+          email?: string;
+          username?: string;
+        }
+      | null;
+    if (!user) {
+      return NextResponse.json({ isAuthenticated: false, user: null }, { status: 401 });
+    }
+
+    const normalizedUser = {
+      _id: String(user._id),
+      name: user.name || user.username || payload.name || "User",
+      email: user.email || user.username || payload.email || "",
+    };
+
     return NextResponse.json({
       isAuthenticated: true,
-      user: {
-        id: "1",
-        name: "Test User",
-        email: "test@example.com",
-      },
+      user: normalizedUser,
     });
   } catch (error) {
     console.error("Error getting auth session:", error);
-    return NextResponse.json(
-      { error: "Failed to get auth session" },
-      { status: 500 }
-    );
+    return NextResponse.json({ isAuthenticated: false, user: null }, { status: 401 });
   }
 }

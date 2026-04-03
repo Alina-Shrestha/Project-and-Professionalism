@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import {
@@ -32,6 +33,7 @@ import React from "react";
 import { Ripple } from "@/components/ui/ripple";
 
 export default function Home() {
+  const router = useRouter();
   const emotions = [
     { value: 0, label: "😔 Down", color: "from-blue-500/50" },
     { value: 25, label: "😊 Content", color: "from-green-500/50" },
@@ -336,7 +338,7 @@ export default function Home() {
                 } else {
                   setShowDialog(false);
                   setCurrentStep(0);
-                  // Here you would navigate to the chat interface
+                  router.push("/signup");
                 }
               }}
               className="relative group px-6"

@@ -40,9 +40,7 @@ export interface ApiResponse {
   };
 }
 
-const API_BASE =
-  process.env.BACKEND_API_URL ||
-  "https://ai-therapist-agent-backend.onrender.com";
+const API_BASE = "/api/chat";
 
 // Helper function to get auth headers
 const getAuthHeaders = () => {
@@ -53,18 +51,32 @@ const getAuthHeaders = () => {
   };
 };
 
+const getErrorMessage = async (response: Response, fallback: string) => {
+  try {
+    const payload = await response.json();
+    return payload?.error || payload?.message || fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 export const createChatSession = async (): Promise<string> => {
   try {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      throw new Error("Please sign in to start a chat session.");
+    }
+
     console.log("Creating new chat session...");
-    const response = await fetch(`${API_BASE}/chat/sessions`, {
+    const response = await fetch(`${API_BASE}/sessions`, {
       method: "POST",
       headers: getAuthHeaders(),
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      console.error("Failed to create chat session:", error);
-      throw new Error(error.error || "Failed to create chat session");
+      throw new Error(
+        await getErrorMessage(response, "Failed to create chat session")
+      );
     }
 
     const data = await response.json();
@@ -82,19 +94,14 @@ export const sendChatMessage = async (
 ): Promise<ApiResponse> => {
   try {
     console.log(`Sending message to session ${sessionId}:`, message);
-    const response = await fetch(
-      `${API_BASE}/chat/sessions/${sessionId}/messages`,
-      {
-        method: "POST",
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ message }),
-      }
-    );
+    const response = await fetch(`${API_BASE}/sessions/${sessionId}/messages`, {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ message }),
+    });
 
     if (!response.ok) {
-      const error = await response.json();
-      console.error("Failed to send message:", error);
-      throw new Error(error.error || "Failed to send message");
+      throw new Error(await getErrorMessage(response, "Failed to send message"));
     }
 
     const data = await response.json();
@@ -111,17 +118,14 @@ export const getChatHistory = async (
 ): Promise<ChatMessage[]> => {
   try {
     console.log(`Fetching chat history for session ${sessionId}`);
-    const response = await fetch(
-      `${API_BASE}/chat/sessions/${sessionId}/history`,
-      {
-        headers: getAuthHeaders(),
-      }
-    );
+    const response = await fetch(`${API_BASE}/sessions/${sessionId}/history`, {
+      headers: getAuthHeaders(),
+    });
 
     if (!response.ok) {
-      const error = await response.json();
-      console.error("Failed to fetch chat history:", error);
-      throw new Error(error.error || "Failed to fetch chat history");
+      throw new Error(
+        await getErrorMessage(response, "Failed to fetch chat history")
+      );
     }
 
     const data = await response.json();
@@ -150,26 +154,34 @@ export const getChatHistory = async (
 export const getAllChatSessions = async (): Promise<ChatSession[]> => {
   try {
     console.log("Fetching all chat sessions...");
-    const response = await fetch(`${API_BASE}/chat/sessions`, {
+    const response = await fetch(`${API_BASE}/sessions`, {
       headers: getAuthHeaders(),
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      console.error("Failed to fetch chat sessions:", error);
-      throw new Error(error.error || "Failed to fetch chat sessions");
+      throw new Error(
+        await getErrorMessage(response, "Failed to fetch chat sessions")
+      );
     }
 
-    const data = await response.json();
-    console.log("Received chat sessions:", data);
+    const payload = await response.json();
+    console.log("Received chat sessions:", payload);
 
-    return data.map((session: any) => {
+    const sessions = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.sessions)
+      ? payload.sessions
+      : [];
+
+    return sessions.map((session: any) => {
       // Ensure dates are valid
-      const createdAt = new Date(session.createdAt || Date.now());
+      const createdAt = new Date(
+        session.createdAt || session.startTime || Date.now()
+      );
       const updatedAt = new Date(session.updatedAt || Date.now());
 
       return {
-        ...session,
+        sessionId: session.sessionId,
         createdAt: isNaN(createdAt.getTime()) ? new Date() : createdAt,
         updatedAt: isNaN(updatedAt.getTime()) ? new Date() : updatedAt,
         messages: (session.messages || []).map((msg: any) => ({

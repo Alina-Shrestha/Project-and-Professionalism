@@ -33,7 +33,7 @@ export async function trackMood(
 
   if (!response.ok) {
     const error = await response.json();
-    throw new Error(error.message || "Failed to track mood");
+    throw new Error(error.error || error.message || "Failed to track mood");
   }
 
   return response.json();
@@ -60,7 +60,7 @@ export async function getMoodHistory(params?: {
 
   if (!response.ok) {
     const error = await response.json();
-    throw new Error(error.message || "Failed to fetch mood history");
+    throw new Error(error.error || error.message || "Failed to fetch mood history");
   }
 
   return response.json();
@@ -83,7 +83,9 @@ export async function getMoodStats(
 
   if (!response.ok) {
     const error = await response.json();
-    throw new Error(error.message || "Failed to fetch mood statistics");
+    throw new Error(
+      error.error || error.message || "Failed to fetch mood statistics"
+    );
   }
 
   return response.json();

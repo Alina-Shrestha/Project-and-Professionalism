@@ -3,6 +3,22 @@ import { User } from "../models/User";
 import { Session } from "../models/Session";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { sendLoginEmail } from "../utils/sendLoginEmail";
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 export const register = async (req: Request, res: Response) => {
   try {
@@ -77,6 +93,10 @@ export const login = async (req: Request, res: Response) => {
       deviceInfo: req.headers["user-agent"],
     });
     await session.save();
+    
+// send email notification
+
+    await sendLoginEmail(user.email, user.name);
 
     // Respond with user data and token
     res.json({

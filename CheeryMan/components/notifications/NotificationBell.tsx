@@ -7,7 +7,15 @@ import React, {
   cloneElement,
   isValidElement,
   useState,
+  useEffect,
 } from "react";
+import {
+  getNotifications,
+  unreadCount,
+  AppNotification,
+  markAllAsRead,
+  clearNotifications,
+} from "@/lib/notifications/notification.service";
 
 type DropdownContext = {
   open?: boolean;
@@ -99,6 +107,43 @@ export function NotificationBell({
   notifications?: { id: string; title: string; body?: string }[];
 }) {
   const [open, setOpen] = useState(false);
+  const [localNotifications, setLocalNotifications] = useState<AppNotification[]>([]);
+  const [localUnreadCount, setLocalUnreadCount] = useState(0);
+
+  useEffect(() => {
+    const syncNotifications = () => {
+      const latest = getNotifications();
+      setLocalNotifications(latest);
+      setLocalUnreadCount(unreadCount());
+    };
+
+    syncNotifications();
+    window.addEventListener("storage", syncNotifications);
+    window.addEventListener("cheeryman:notifications-updated", syncNotifications);
+
+    return () => {
+      window.removeEventListener("storage", syncNotifications);
+      window.removeEventListener("cheeryman:notifications-updated", syncNotifications);
+    };
+  }, []);
+
+  const effectiveCount = count > 0 ? count : localUnreadCount;
+  const effectiveNotifications =
+    notifications.length > 0
+      ? notifications
+      : localNotifications.map((n) => ({
+          id: n.id,
+          title: n.title,
+          body: n.message,
+        }));
+
+  const handleMarkAllRead = () => {
+    markAllAsRead();
+  };
+
+  const handleClearAll = () => {
+    clearNotifications();
+  };
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -131,20 +176,40 @@ export function NotificationBell({
             />
           </svg>
 
-          {count > 0 && (
+          {effectiveCount > 0 && (
             <span className="absolute -top-1 -right-1 inline-flex items-center justify-center min-w-[18px] h-4 px-1 rounded-full text-xs font-medium bg-red-600 text-white">
-              {count}
+              {effectiveCount}
             </span>
           )}
         </button>
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="end" className="w-80 bg-white dark:bg-gray-800 border rounded-md shadow-lg p-2">
-        <div className="text-sm text-muted-foreground p-2">
-          {notifications.length === 0 ? (
+        <div className="px-2 pb-2 pt-1 flex items-center justify-between border-b">
+          <span className="text-xs font-semibold text-foreground">Notifications</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleMarkAllRead}
+              className="text-[11px] text-primary hover:underline"
+            >
+              Mark all read
+            </button>
+            <button
+              type="button"
+              onClick={handleClearAll}
+              className="text-[11px] text-destructive hover:underline"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+
+        <div className="text-sm text-muted-foreground p-2 max-h-80 overflow-y-auto overscroll-contain">
+          {effectiveNotifications.length === 0 ? (
             <div className="px-2 py-3 text-center text-xs text-muted-foreground">No notifications</div>
           ) : (
-            notifications.map((n) => (
+            effectiveNotifications.map((n) => (
               <div key={n.id} className="p-2 border-b last:border-b-0">
                 <div className="font-medium text-sm">{n.title}</div>
                 {n.body && <div className="text-xs text-muted-foreground mt-1">{n.body}</div>}

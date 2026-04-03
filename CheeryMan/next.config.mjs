@@ -1,5 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  skipMiddlewareUrlNormalize: true,
+
   eslint: {
     ignoreDuringBuilds: true,
   },
@@ -8,10 +10,6 @@ const nextConfig = {
   },
 
   experimental: {
-    appDir: true,
-    suppressHydrationWarning: true,
-    skipTypeChecking: true,
-    skipMiddlewareUrlNormalize: true,
     missingSuspenseWithCSRBailout: false,
   },
 
