@@ -396,6 +396,17 @@ export default function Dashboard() {
     return () => clearInterval(timer);
   }, []);
 
+  // Auto-open onboarding after sign-in, run only after client mount to avoid
+  // hook-order mismatches during SSR or while session is loading.
+  useEffect(() => {
+    if (!mounted) return;
+    if (!sessionLoading && user && !(user as any).onboardingCompleted) {
+      setOnboardingModalTrigger((v) => v + 1);
+    }
+  }, [mounted, user, sessionLoading]);
+
+  
+
   useEffect(() => {
     if (!sessionLoading) {
       if (!user) {
@@ -697,6 +708,16 @@ export default function Dashboard() {
       </div>
     );
   }
+
+  // Auto-open onboarding after sign-in is disabled temporarily due to a runtime
+  // "Rendered more hooks than during the previous render" error. Re-enable
+  // after investigating root cause (likely a conditional hook mismatch).
+  // useEffect(() => {
+  //   if (!sessionLoading && user && !(user as any).onboardingCompleted) {
+  //     setOnboardingModalTrigger((v) => v + 1);
+  //   }
+  // }, [user, sessionLoading]);
+  // (onboarding auto-open effect moved earlier to ensure hooks order stability)
 
   return (
     <div className="min-h-screen bg-background">
